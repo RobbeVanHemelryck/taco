@@ -13,10 +13,17 @@ A small, mobile-first web client for Docker Compose hosts. It just drives the
 
 ## Run
 
-```sh
-docker compose up -d --build   # http://<host>:8080
+```yaml
+services:
+  taco:
+    image: taco
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/stacks:/stacks   # your compose stacks
 ```
 
-Mount your stacks directory at `/stacks` (see `compose.yaml`).
+Then open `http://<host>:8080`.
 
 > There is no auth, by design. It's root on the host, so only expose it on a trusted network.
