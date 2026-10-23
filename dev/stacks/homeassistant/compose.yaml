@@ -1,0 +1,9 @@
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    network_mode: host
+    restart: unless-stopped
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"

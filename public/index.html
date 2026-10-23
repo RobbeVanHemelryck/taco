@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>taco</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="/npm/@fontsource-variable/inter/index.css">
+  <link rel="stylesheet" href="/npm/@fontsource-variable/jetbrains-mono/index.css">
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "@codemirror/autocomplete": "/npm/@codemirror/autocomplete/dist/index.js",
+      "@codemirror/commands": "/npm/@codemirror/commands/dist/index.js",
+      "@codemirror/lang-yaml": "/npm/@codemirror/lang-yaml/dist/index.js",
+      "@codemirror/language": "/npm/@codemirror/language/dist/index.js",
+      "@codemirror/lint": "/npm/@codemirror/lint/dist/index.js",
+      "@codemirror/search": "/npm/@codemirror/search/dist/index.js",
+      "@codemirror/state": "/npm/@codemirror/state/dist/index.js",
+      "@codemirror/streamparser": "/npm/@codemirror/streamparser/dist/index.js",
+      "@codemirror/view": "/npm/@codemirror/view/dist/index.js",
+      "@lezer/common": "/npm/@lezer/common/dist/index.js",
+      "@lezer/highlight": "/npm/@lezer/highlight/dist/index.js",
+      "@lezer/lr": "/npm/@lezer/lr/dist/index.js",
+      "@lezer/yaml": "/npm/@lezer/yaml/dist/index.js",
+      "@marijn/find-cluster-break": "/npm/@marijn/find-cluster-break/src/index.js",
+      "crelt": "/npm/crelt/index.js",
+      "style-mod": "/npm/style-mod/src/style-mod.js",
+      "w3c-keyname": "/npm/w3c-keyname/index.js",
+      "yaml": "/npm/yaml/browser/index.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <div id="banner" hidden></div>
+    <div id="layout">
+      <aside id="sidebar"></aside>
+      <div id="sb-resizer" title="Drag to resize"></div>
+      <main id="main"></main>
+      <div id="resizer" hidden></div>
+      <section id="panel" hidden></section>
+    </div>
+    <nav id="tabbar"></nav>
+  </div>
+  <div id="job" hidden></div>
+  <div id="toasts"></div>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
