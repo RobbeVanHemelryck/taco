@@ -264,7 +264,8 @@ function renderSidebar() {
   if (!sb.firstChild) {
     sb.innerHTML = `<div data-n="head"></div>
       <label class="sb-search">${icon('search')}<input class="filter" type="search" placeholder="Search" value="${esc(S.filter)}" autocapitalize="off" autocorrect="off" spellcheck="false"><kbd>/</kbd></label>
-      <nav class="sb-list" data-n="list"></nav>`;
+      <nav class="sb-list" data-n="list"></nav>
+      <div class="sb-foot"><button class="sb-theme" data-act="theme" title="Toggle light/dark mode" aria-label="Toggle light/dark mode">${icon('sun', 'sun')}${icon('moon', 'moon')}</button></div>`;
   }
   const i = S.info;
   const head = `<div class="sb-head">
@@ -313,6 +314,24 @@ function renderTabbar(scroll) {
   }
   if (scroll) $('.tb-tab.active', box)?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
 }
+
+// ================================================================ theme
+
+const root = document.documentElement;
+const syncThemeColor = () => $('meta[name="theme-color"]').setAttribute('content', getComputedStyle(root).getPropertyValue('--bg').trim());
+function toggleTheme() {
+  const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+  root.dataset.theme = next;
+  localStorage.setItem('taco.theme', next);
+  syncThemeColor();
+}
+// Until the toggle is used, follow the OS setting.
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+  if (localStorage.getItem('taco.theme')) return;
+  root.dataset.theme = e.matches ? 'dark' : 'light';
+  syncThemeColor();
+});
+syncThemeColor();
 
 // ================================================================ main page
 
@@ -1109,6 +1128,8 @@ document.addEventListener('click', async (e) => {
       return selectionAction(t.dataset.a);
     case 'newstack':
       return newStack();
+    case 'theme':
+      return toggleTheme();
     case 'jump':
       return jumpMenu(t);
     case 'imenu':
