@@ -110,7 +110,32 @@ if (!state.images) {
   for (const c of state.containers) ensureImage(c.image);
   state.images.push(mkImage('postgres:15', '412MB', 120), mkImage('node:20-alpine', '134MB', 40), mkImage('nginx:1.25-alpine', '43.2MB', 200), mkImage('', '1.21GB', 30), mkImage('', '88.4MB', 12));
 }
+// Volumes, with the containers that mount them (by name) and where.
+const mkVolume = (name, size, mounts = [], project = '') => ({
+  name,
+  size,
+  mounts,
+  labels: !project ? (/^[0-9a-f]{64}$/.test(name) ? { 'com.docker.volume.anonymous': '' } : {}) : { 'com.docker.compose.project': project, 'com.docker.compose.volume': name.slice(project.length + 1) },
+});
+if (!state.volumes) {
+  state.volumes = [
+    mkVolume('media_jellyfin-config', '1.4GB', [['media-jellyfin-1', '/config']], 'media'),
+    mkVolume(hex(), '6.2GB', [['media-jellyfin-1', '/cache']]),
+    mkVolume('monitoring_prometheus-data', '3.1GB', [['monitoring-prometheus-1', '/prometheus']], 'monitoring'),
+    mkVolume('monitoring_grafana-data', '48.2MB', [['monitoring-grafana-1', '/var/lib/grafana']], 'monitoring'),
+    mkVolume('blog_db-data', '212MB', [['blog-db-1', '/var/lib/postgresql/data']], 'blog'),
+    mkVolume('shared-certs', '24kB', [['blog-nginx-1', '/etc/ssl/private'], ['blog-app-1', '/certs'], ['monitoring-grafana-1', '/certs'], ['media-jellyfin-1', '/certs']]),
+    mkVolume('redis-data', '18.4MB', [['old-redis', '/data']]),
+    mkVolume('nextcloud_db', '2.3GB'),
+    mkVolume(hex(), '840MB'),
+    mkVolume(hex(), '0B'),
+  ];
+}
 save();
+
+const volumeMounts = (c) =>
+  state.volumes.flatMap((v) => v.mounts.filter(([n]) => n === c.name).map(([, dest]) => ({ Type: 'volume', Name: v.name, Source: `/var/lib/docker/volumes/${v.name}/_data`, Destination: dest, Driver: 'local', RW: !dest.startsWith('/etc/'), Propagation: '' })));
+const volumeUsers = (v) => v.mounts.filter(([n]) => state.containers.some((c) => c.name === n));
 
 function find(ref) {
   const c = state.containers.find((x) => x.id.startsWith(ref) || x.name === ref);
@@ -364,6 +389,50 @@ async function main() {
       out(`\nTotal reclaimed space: ${gone.length ? '1.9GB' : '0B'}\n`);
       return;
     }
+    case 'system': {
+      // Only `system df -v --format '{{json .Volumes}}'`.
+      if (rest[0] !== 'df') break;
+      const labels = (v) => Object.entries(v.labels).map(([k, x]) => `${k}=${x}`).join(',');
+      return out(JSON.stringify(state.volumes.map((v) => ({
+        Availability: 'N/A', Driver: 'local', Group: 'N/A', Labels: labels(v), Links: String(volumeUsers(v).length),
+        Mountpoint: `/var/lib/docker/volumes/${v.name}/_data`, Name: v.name, Scope: 'local', Size: v.size, Status: 'N/A',
+      }))) + '\n');
+    }
+    case 'volume': {
+      if (rest[0] === 'rm') {
+        for (const name of rest.slice(1).filter((a) => !a.startsWith('-'))) {
+          const v = state.volumes.find((x) => x.name === name);
+          if (!v) {
+            err(`Error response from daemon: get ${name}: no such volume\n`);
+            process.exit(1);
+          }
+          if (volumeUsers(v).length) {
+            err(`Error response from daemon: remove ${name}: volume is in use - [${volumeUsers(v).map(([n]) => find(n).id).join(', ')}]\n`);
+            process.exit(1);
+          }
+          await sleep(300);
+          state.volumes = state.volumes.filter((x) => x !== v);
+          out(`${name}\n`);
+        }
+        save();
+        return;
+      }
+      if (rest[0] === 'prune') {
+        // Like docker >= 23: without --all only anonymous volumes go.
+        const all = rest.includes('--all') || rest.includes('-a');
+        const gone = state.volumes.filter((v) => !volumeUsers(v).length && (all || 'com.docker.volume.anonymous' in v.labels));
+        if (gone.length) out('Deleted Volumes:\n');
+        for (const v of gone) {
+          await sleep(150);
+          out(`${v.name}\n`);
+        }
+        state.volumes = state.volumes.filter((v) => !gone.includes(v));
+        save();
+        out(`\nTotal reclaimed space: ${gone.length ? '840MB' : '0B'}\n`);
+        return;
+      }
+      break;
+    }
     case 'stats':
       for (const c of state.containers.filter((x) => x.state === 'running')) {
         out(JSON.stringify({ ID: c.id, Name: c.name, CPUPerc: `${(Math.random() * 8).toFixed(2)}%`, MemUsage: `${(20 + Math.random() * 400).toFixed(1)}MiB / 15.5GiB`, MemPerc: '1.2%', NetIO: '1.2MB / 800kB', BlockIO: '20MB / 4MB', PIDs: '12' }) + '\n');
@@ -371,6 +440,14 @@ async function main() {
       return;
     case 'inspect': {
       const fi = rest.indexOf('--format');
+      if (fi >= 0 && rest[fi + 1].includes('.Mounts')) {
+        // --format '{{.Id}} {{json .Mounts}}' <ids…>
+        for (const ref of rest.slice(fi + 2)) {
+          const c = find(ref);
+          out(`${c.id} ${JSON.stringify([{ Type: 'bind', Source: '/srv/data/' + c.service, Destination: '/config', RW: true }, ...volumeMounts(c)])}\n`);
+        }
+        return;
+      }
       if (fi >= 0) {
         // Only the form taco uses: --format '{{.Id}} {{.Image}}' <ids…>
         for (const ref of rest.slice(fi + 2)) {
@@ -387,7 +464,7 @@ async function main() {
         RestartCount: 0,
         HostConfig: { RestartPolicy: { Name: 'unless-stopped' } },
         Config: { Image: c.image, User: '', WorkingDir: '/app', Env: ['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin', 'TZ=Europe/Brussels', 'PUID=1000'], Cmd: ['--config', '/config'], Entrypoint: ['/init'], Labels: c.project ? { 'com.docker.compose.project': c.project, 'com.docker.compose.service': c.service } : {} },
-        Mounts: [{ Type: 'bind', Source: '/srv/data/' + c.service, Destination: '/config', RW: true }, { Type: 'volume', Name: `${c.project || 'x'}_cache`, Source: '/var/lib/docker/volumes/cache/_data', Destination: '/cache', RW: false }],
+        Mounts: [{ Type: 'bind', Source: '/srv/data/' + c.service, Destination: '/config', RW: true }, ...volumeMounts(c)],
         NetworkSettings: { Ports: Object.fromEntries(c.ports.map((p) => [`${p.container}/tcp`, [{ HostIp: '0.0.0.0', HostPort: p.host }]])), Networks: { [`${c.project || 'bridge'}_default`]: { IPAddress: '172.18.0.' + (2 + (parseInt(c.id.slice(0, 2), 16) % 200)) } } },
       }]) + '\n');
     }

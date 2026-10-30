@@ -11,9 +11,11 @@ const S = {
   tab: '_home',
   view: null, // side panel: { key, hash, destroy }
   files: null, // the stack page's file editors: { name, canLeave, destroy, ... }
-  sel: new Set(), // selected rows on the current page: c:<container> | s:<service> | i:<image id>
+  sel: new Set(), // selected rows on the current page: c:<container> | s:<service> | i:<image id> | v:<volume>
   images: null, // { at, list, error, loading }
   imgFilter: 'all', // all | used | unused
+  volumes: null, // { at, list, error, loading }
+  volFilter: 'all', // all | used | unused
   lastSel: null,
 };
 
@@ -105,11 +107,12 @@ function tabs() {
   for (const p of S.projects) t.push({ id: `p:${p.name}`, label: p.name, project: p.name });
   if (standalone().length) t.push({ id: '_standalone', label: 'Standalone' });
   t.push({ id: '_images', label: 'Images' });
+  t.push({ id: '_volumes', label: 'Volumes' });
   return t;
 }
 const tabIndex = (id) => tabs().findIndex((t) => t.id === id);
 
-const TAB_PATHS = { _home: '', _standalone: 'standalone', _images: 'images' };
+const TAB_PATHS = { _home: '', _standalone: 'standalone', _images: 'images', _volumes: 'volumes' };
 const tabPath = (id) => TAB_PATHS[id] ?? `p/${encodeURIComponent(id.slice(2))}`;
 const viewPath = (v) => (v ? `${v.kind}/${encodeURIComponent(v.name)}/${v.mode}` : '');
 const hashFor = (tab, view) => `#/${[tabPath(tab), view || ''].filter(Boolean).join('/')}`;
@@ -120,7 +123,7 @@ function parseRoute() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
   let tab = '_home';
   let rest = parts;
-  if (parts[0] === 'standalone' || parts[0] === 'images') {
+  if (parts[0] === 'standalone' || parts[0] === 'images' || parts[0] === 'volumes') {
     tab = `_${parts[0]}`;
     rest = parts.slice(1);
   } else if (parts[0] === 'p' && parts[1]) {
@@ -291,6 +294,8 @@ function renderSidebar() {
   if (sa.length) list += item('_standalone', icon('box'), 'Standalone', `${sa.filter((c) => c.state === 'running').length}/${sa.length}`);
   const imgs = S.images?.list;
   list += item('_images', icon('disk'), 'Images', imgs ? (imgs.some((x) => !x.containers.length) ? `${imgs.filter((x) => !x.containers.length).length} unused` : imgs.length) : '');
+  const vols = S.volumes?.list;
+  list += item('_volumes', icon('database'), 'Volumes', vols ? (vols.some((x) => !x.containers.length) ? `${vols.filter((x) => !x.containers.length).length} unused` : vols.length) : '');
   if (head !== lastSide.head) $('[data-n="head"]', sb).innerHTML = lastSide.head = head;
   if (list !== lastSide.list) $('[data-n="list"]', sb).innerHTML = lastSide.list = list;
 }
@@ -303,7 +308,7 @@ function renderTabbar(scroll) {
   }
   const html = tabs()
     .map((t) => {
-      const lead = t.project ? `<span class="dot ${projectTone(t.project).tone}"></span>` : icon({ _home: 'home', _images: 'disk' }[t.id] || 'box');
+      const lead = t.project ? `<span class="dot ${projectTone(t.project).tone}"></span>` : icon({ _home: 'home', _images: 'disk', _volumes: 'database' }[t.id] || 'box');
       return `<button class="tb-tab ${t.id === S.tab ? 'active' : ''}" role="tab" data-tab="${esc(t.id)}">${lead}<span>${esc(t.label)}</span></button>`;
     })
     .join('');
@@ -379,6 +384,7 @@ function renderers() {
   if (S.tab === '_home') return renderHome();
   if (S.tab === '_standalone') return renderStandalone();
   if (S.tab === '_images') return renderImages();
+  if (S.tab === '_volumes') return renderVolumes();
   const name = S.tab.slice(2);
   const p = projectByName(name);
   if (!p) {
@@ -712,7 +718,7 @@ function imageRow(img) {
       : `<span class="pill off ghost"><span class="dot"></span>${untagged ? 'Untagged' : 'Unused'}</span>`;
   const users = img.containers
     .slice(0, 3)
-    .map((c) => `<button class="port user" ${c.project ? `data-tab="p:${esc(c.project)}"` : 'data-tab="_standalone"'} title="${esc(c.name)} (${esc(c.state)})"><span class="dot ${c.state === 'running' ? 'ok' : 'off'}"></span>${esc(c.service && c.project ? `${c.project}/${c.service}` : c.name)}</button>`)
+    .map((c) => `<button class="port user" ${c.project ? `data-tab="p:${esc(c.project)}"` : 'data-tab="_standalone"'} title="${esc(c.name)} (${esc(c.state)})"><span class="dot ${c.state === 'running' ? 'ok' : 'off'}"></span><span class="lbl">${esc(c.service && c.project ? `${c.project}/${c.service}` : c.name)}</span></button>`)
     .join('');
   const more = img.containers.length > 3 ? `<span class="port more">+${img.containers.length - 3}</span>` : '';
   const extraTags = img.tags.length > 1 ? ` · +${img.tags.length - 1} tag${img.tags.length > 2 ? 's' : ''}` : '';
@@ -808,6 +814,140 @@ async function imageMenu(btn, id) {
   if (v === 'copyid') copy(img.id);
   else if (v === 'copyname') copy(img.tags[0]);
   else if (v === 'del') deleteImages([img.id]);
+}
+
+// ---------------------------------------------------------------- volumes
+
+async function loadVolumes(force) {
+  const cur = S.volumes;
+  if (!force && cur && (cur.loading || Date.now() - cur.at < 15_000)) return;
+  S.volumes = { ...(cur || { list: null }), loading: true, at: Date.now() };
+  try {
+    const r = await api('/api/volumes');
+    S.volumes = { at: Date.now(), list: r.volumes };
+  } catch (e) {
+    S.volumes = { at: Date.now(), list: cur?.list || null, error: e.message };
+  }
+  renderSidebar();
+  if (S.tab === '_volumes') renderMain();
+}
+
+const volumeKey = (v) => `v:${v.name}`;
+// Anonymous volumes are named by a 64-char hash: show it short, like an image ID.
+const volumeName = (v) => (v.anonymous ? v.name.slice(0, 12) : v.name);
+
+function volumeRow(v) {
+  const key = volumeKey(v);
+  const used = v.containers.length > 0;
+  const running = v.containers.some((c) => c.state === 'running');
+  const sel = S.sel.has(key);
+  const pill = running
+    ? '<span class="pill ok"><span class="dot"></span>In use</span>'
+    : used
+      ? '<span class="pill off"><span class="dot"></span>Stopped</span>'
+      : '<span class="pill off ghost"><span class="dot"></span>Unused</span>';
+  const users = v.containers
+    .slice(0, 3)
+    .map((c) => `<button class="port user" ${c.project ? `data-tab="p:${esc(c.project)}"` : 'data-tab="_standalone"'} title="${esc(c.name)} (${esc(c.state)}) → ${esc(c.destination)}${c.rw ? '' : ' (read-only)'}"><span class="dot ${c.state === 'running' ? 'ok' : 'off'}"></span><span class="lbl">${esc(c.service && c.project ? `${c.project}/${c.service}` : c.name)}</span></button>`)
+    .join('');
+  const more = v.containers.length > 3 ? `<span class="port more">+${v.containers.length - 3}</span>` : '';
+  const sub = [v.anonymous ? 'anonymous' : v.project ? `stack ${v.project}` : '', v.driver !== 'local' ? v.driver : ''].filter(Boolean).join(' · ') || v.driver;
+  return `<div class="crow img-row ${sel ? 'selected' : ''} ${used ? 'in-use' : ''}" data-key="${esc(key)}" ${used ? '' : 'data-act="rowsel"'}>
+    ${used ? '<span class="cb disabled" title="In use by a container"></span>' : checkbox(sel ? 'on' : '', `data-act="sel" data-key="${esc(key)}"`, `Select ${volumeName(v)}`)}
+    <div class="c-name"><div class="c-txt"><div class="n ${v.anonymous ? 'untagged' : ''}" title="${esc(`${v.name}\n${v.mountpoint}`)}">${esc(volumeName(v))}</div><div class="img">${esc(sub)}</div></div></div>
+    <div class="c-meta">
+      <div class="c-status">${pill}</div>
+      <div class="c-ports">${users}${more}</div>
+      <div class="c-usage"><span class="usage"><span class="u-cpu">${v.size === null ? '–' : esc(fmtSize(v.size))}</span></span></div>
+    </div>
+    <div class="c-acts"><button class="rb icon" data-act="vmenu" data-name="${esc(v.name)}" aria-label="Volume actions" title="More">${icon('more')}</button></div>
+  </div>`;
+}
+
+function renderVolumes() {
+  loadVolumes();
+  const list = S.volumes?.list;
+  const total = list ? list.reduce((a, x) => a + (x.size || 0), 0) : 0;
+  const head = `<header class="phead">
+    <div class="crumbs wide-only"><button data-tab="_home">${esc(S.info?.host || 'Overview')}</button>${icon('chevron')}<span class="cur">Volumes</span></div>
+    <div class="ptitle"><span class="picon">${icon('database')}</span><h1>Volumes</h1>${list ? `<span class="pill off lg"><span class="dot"></span>${list.length} volumes · ${list.filter((x) => !x.containers.length).length} unused · ${esc(fmtSize(total))}</span>` : ''}</div>
+    <div class="ppath" style="direction:ltr">Every volume on this host (docker system df -v), and the containers mounting it</div>
+  </header>`;
+  if (!list) {
+    const body = S.volumes?.error
+      ? `<div class="notice">${icon('alert')}<div>${esc(S.volumes.error)}</div></div>`
+      : '<div class="fcard loading"><div class="shimmer"></div><div class="shimmer short"></div><div class="shimmer"></div></div>';
+    return { kind: 'volumes', slots: ['head', 'toolbar', 'list'], html: { head, toolbar: '<div class="toolbar"></div>', list: body } };
+  }
+  const f = S.filter.trim().toLowerCase();
+  const unused = list.filter((x) => !x.containers.length);
+  const unusedAnon = unused.filter((x) => x.anonymous);
+  pruneSelection(unused.map(volumeKey));
+  const shown = list
+    .filter((x) => (S.volFilter === 'used' ? x.containers.length : S.volFilter === 'unused' ? !x.containers.length : true))
+    .filter((x) => !f || [x.name, x.project, ...x.containers.map((c) => c.name)].some((t) => t?.toLowerCase().includes(f)))
+    .sort((a, b) => a.anonymous - b.anonymous || (a.anonymous ? (b.size || 0) - (a.size || 0) : a.name.localeCompare(b.name)));
+
+  let toolbar;
+  if (S.sel.size) {
+    const size = list.filter((x) => S.sel.has(volumeKey(x))).reduce((a, x) => a + (x.size || 0), 0);
+    toolbar = `<div class="toolbar selmode">
+      <div class="selchip"><span class="selnum">${S.sel.size}</span><span>selected</span><button class="selx" data-act="selclear" aria-label="Clear selection" title="Clear selection (Esc)">${icon('x')}</button></div>
+      <div class="tb-scroll"><span class="tb-note">${esc(fmtSize(size))}</span>${tbtn('voldel', 'trash', 'Delete', '', 'danger')}</div>
+    </div>`;
+  } else {
+    const seg = (v, label, n) => `<button class="seg-b ${S.volFilter === v ? 'on' : ''}" data-act="volfilter" data-f="${v}">${label}<span class="seg-n">${n}</span></button>`;
+    toolbar = `<div class="toolbar">
+      <div class="seg">${seg('all', 'All', list.length)}${seg('used', 'In use', list.length - unused.length)}${seg('unused', 'Unused', unused.length)}</div>
+      <span class="sp"></span>
+      ${tbtn('volprune', 'trash', 'Remove anonymous', unusedAnon.length ? '' : 'disabled', 'danger-text')}
+      <button class="btn icon" data-act="volreload" aria-label="Reload" title="Reload">${icon('refresh')}</button>
+    </div>`;
+  }
+  const body = shown.length
+    ? listHtml(shown.map(volumeRow).join(''), shown.filter((x) => !x.containers.length).map(volumeKey), { title: 'Volumes', cols: ['Status', 'Used by', 'Size'] })
+    : `<div class="empty card">${icon('database')}<div class="et">${f ? `Nothing matches “${esc(S.filter)}”` : S.volFilter === 'unused' ? 'No unused volumes' : 'No volumes'}</div></div>`;
+  return { kind: 'volumes', slots: ['head', 'toolbar', 'list'], html: { head, toolbar, list: body } };
+}
+
+async function deleteVolumes(names) {
+  const list = S.volumes?.list || [];
+  const vols = names.map((n) => list.find((x) => x.name === n)).filter(Boolean);
+  if (!vols.length) return;
+  const size = vols.reduce((a, x) => a + (x.size || 0), 0);
+  const label = vols.slice(0, 3).map(volumeName).join(', ') + (vols.length > 3 ? ` and ${vols.length - 3} more` : '');
+  const named = vols.filter((x) => !x.anonymous).length;
+  const ok = await confirmAction(`Delete ${vols.length === 1 ? label : `${vols.length} volumes`}?`, `${vols.length > 1 ? `${label}. ` : ''}Frees ${fmtSize(size)}. ${named ? 'The data in named volumes is gone for good.' : 'This cannot be undone.'}`, 'Delete');
+  if (!ok) return;
+  S.sel.clear();
+  await runJob(`Delete ${vols.length === 1 ? label : `${vols.length} volumes`}`, '/api/volumes/rm', { names: vols.map((x) => x.name) });
+}
+
+async function pruneVolumes() {
+  const anon = (S.volumes?.list || []).filter((x) => !x.containers.length && x.anonymous);
+  const size = anon.reduce((a, x) => a + (x.size || 0), 0);
+  const ok = await confirmAction(`Remove ${anon.length} unused anonymous volumes?`, `Runs docker volume prune: anonymous volumes no container uses are deleted (${fmtSize(size)}). Named volumes are kept.`, 'Remove');
+  if (ok) await runJob('Remove unused anonymous volumes', '/api/volumes/prune', {});
+}
+
+async function volumeMenu(btn, name) {
+  const v = S.volumes?.list?.find((x) => x.name === name);
+  if (!v) return;
+  const used = v.containers.length > 0;
+  const r = await menu(btn, {
+    title: volumeName(v),
+    subtitle: [v.driver, v.size === null ? '' : fmtSize(v.size)].filter(Boolean).join(' · '),
+    items: [
+      { label: 'Copy name', icon: 'file', value: 'copyname' },
+      { label: 'Copy mountpoint', icon: 'file', value: 'copypath' },
+      'sep',
+      { label: used ? 'Delete (in use)' : 'Delete', icon: 'trash', value: 'del', danger: true, disabled: used },
+    ],
+  });
+  const copy = (t) => navigator.clipboard?.writeText(t).then(() => toast('Copied'), () => toast(t));
+  if (r === 'copyname') copy(v.name);
+  else if (r === 'copypath') copy(v.mountpoint);
+  else if (r === 'del') deleteVolumes([v.name]);
 }
 
 // ================================================================ selection
@@ -945,6 +1085,7 @@ async function runJob(title, url, body) {
   for (const k of Object.keys(S.services)) S.services[k].at = 0;
   refresh();
   if (S.images) loadImages(true);
+  if (S.volumes) loadVolumes(true);
   return code;
 }
 
@@ -1061,7 +1202,7 @@ async function jumpMenu(btn) {
     items: [
       ...tabs().map((t) => {
         const pt = t.project && projectTone(t.project);
-        return { label: t.label, icon: t.project ? 'layers' : { _home: 'home', _images: 'disk' }[t.id] || 'box', value: `t:${t.id}`, hint: pt ? countLabel(pt) : '' };
+        return { label: t.label, icon: t.project ? 'layers' : { _home: 'home', _images: 'disk', _volumes: 'database' }[t.id] || 'box', value: `t:${t.id}`, hint: pt ? countLabel(pt) : '' };
       }),
       S.info?.stacksDir && 'sep',
       S.info?.stacksDir && { label: 'New stack', icon: 'plus', value: 'new' },
@@ -1142,6 +1283,18 @@ document.addEventListener('click', async (e) => {
       return loadImages(true);
     case 'imgfilter':
       S.imgFilter = t.dataset.f;
+      S.sel.clear();
+      return renderMain();
+    case 'vmenu':
+      return volumeMenu(t, t.dataset.name);
+    case 'voldel':
+      return deleteVolumes([...S.sel].map((k) => k.slice(2)));
+    case 'volprune':
+      return pruneVolumes();
+    case 'volreload':
+      return loadVolumes(true);
+    case 'volfilter':
+      S.volFilter = t.dataset.f;
       S.sel.clear();
       return renderMain();
   }
@@ -1305,7 +1458,10 @@ function schedulePolling() {
   pollTimer = setInterval(() => {
     refresh();
     if (++n % 4 === 0) refreshStats();
-    if (n % 20 === 0) loadImages();
+    if (n % 20 === 0) {
+      loadImages();
+      loadVolumes();
+    }
   }, 3000);
 }
 document.addEventListener('visibilitychange', () => {
@@ -1337,5 +1493,6 @@ document.addEventListener('visibilitychange', () => {
   render();
   refreshStats();
   loadImages();
+  loadVolumes();
   schedulePolling();
 })();

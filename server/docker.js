@@ -176,3 +176,70 @@ export function attachImageUsage(images, containers, imageIds) {
     return { ...img, containers: users.map((c) => ({ name: c.name, state: c.state, project: c.project, service: c.service })) };
   });
 }
+
+// ---------------------------------------------------------------- volumes
+
+let volumeCache = { at: 0, data: null };
+export function invalidateVolumes() {
+  volumeCache.at = 0;
+}
+
+// "a=1,b=" -> { a: '1', b: '' }
+function parseLabels(s) {
+  const out = {};
+  for (const kv of splitList(s)) {
+    const i = kv.indexOf('=');
+    if (i < 0) out[kv] = '';
+    else out[kv.slice(0, i)] = kv.slice(i + 1);
+  }
+  return out;
+}
+
+// `docker system df -v` rather than `docker volume ls`: it's the only CLI view
+// that has the size of each volume.
+export async function listVolumes() {
+  if (volumeCache.data && Date.now() - volumeCache.at < 2000) return volumeCache.data;
+  const out = await runOk(['system', 'df', '-v', '--format', '{{json .Volumes}}'], { timeout: 60_000 });
+  const rows = JSON.parse(out.trim() || '[]') || [];
+  volumeCache = {
+    at: Date.now(),
+    data: rows.map((r) => {
+      const labels = parseLabels(r.Labels);
+      return {
+        name: r.Name,
+        driver: r.Driver,
+        mountpoint: r.Mountpoint,
+        size: r.Size && r.Size !== 'N/A' ? parseSize(r.Size) : null,
+        // Compose labels volumes it creates; an unlabelled 64-hex name is anonymous too (older engines).
+        anonymous: 'com.docker.volume.anonymous' in labels || (/^[0-9a-f]{64}$/.test(r.Name) && !labels['com.docker.compose.project']),
+        project: labels['com.docker.compose.project'] || '',
+        composeName: labels['com.docker.compose.volume'] || '',
+      };
+    }),
+  };
+  return volumeCache.data;
+}
+
+// The volume mounts of each container: container ID -> [{ name, destination, rw }].
+export async function containerVolumeMounts(ids) {
+  if (!ids.length) return new Map();
+  const out = await runOk(['inspect', '--type', 'container', '--format', '{{.Id}} {{json .Mounts}}', ...ids]);
+  const res = new Map();
+  for (const line of out.split('\n').filter(Boolean)) {
+    const i = line.indexOf(' ');
+    const mounts = JSON.parse(line.slice(i + 1)) || [];
+    res.set(line.slice(0, i), mounts.filter((m) => m.Type === 'volume').map((m) => ({ name: m.Name, destination: m.Destination, rw: m.RW })));
+  }
+  return res;
+}
+
+export function attachVolumeUsage(volumes, containers, mounts) {
+  return volumes.map((v) => {
+    const users = [];
+    for (const c of containers) {
+      const m = (mounts.get(c.id) || []).find((x) => x.name === v.name);
+      if (m) users.push({ name: c.name, state: c.state, project: c.project, service: c.service, destination: m.destination, rw: m.rw });
+    }
+    return { ...v, containers: users };
+  });
+}
