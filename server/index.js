@@ -137,6 +137,7 @@ async function streamJob(res, steps, { keepGoing = false } = {}) {
   }
   projects.invalidate();
   docker.invalidateImages();
+  docker.invalidateVolumes();
   send({ t: 'exit', code: failed ? code || 1 : 0 });
   res.end();
 }
@@ -205,6 +206,29 @@ route('POST', '/api/images/rm', async ({ body, res }) => {
 
 route('POST', '/api/images/prune', async ({ res }) => {
   await streamJob(res, [['image', 'prune', '--all', '--force']]);
+});
+
+// Volumes, with the containers (running or not) that mount each one.
+async function volumesWithUsage() {
+  const [volumes, { containers }] = await Promise.all([docker.listVolumes(), projects.overview(3000)]);
+  return docker.attachVolumeUsage(volumes, containers, await docker.containerVolumeMounts(containers.map((c) => c.id)));
+}
+
+route('GET', '/api/volumes', async () => ({ volumes: await volumesWithUsage() }));
+
+route('POST', '/api/volumes/rm', async ({ body, res }) => {
+  const names = Array.isArray(body.names) ? body.names : [];
+  const all = await volumesWithUsage();
+  const targets = names.map((n) => all.find((v) => v.name === n));
+  if (!targets.length || targets.some((t) => !t)) throw new HttpError(404, 'unknown volume');
+  const used = targets.filter((t) => t.containers.length);
+  if (used.length) throw new HttpError(409, `in use by ${used[0].containers.map((c) => c.name).join(', ')}`);
+  await streamJob(res, targets.map((t) => ['volume', 'rm', t.name]), { keepGoing: true });
+});
+
+// Without --all, prune only removes anonymous volumes: named ones are usually data someone wants to keep.
+route('POST', '/api/volumes/prune', async ({ res }) => {
+  await streamJob(res, [['volume', 'prune', '--force']]);
 });
 
 route('GET', '/api/projects/:name/services', async ({ params }) =>
