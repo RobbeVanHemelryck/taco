@@ -712,7 +712,7 @@ function imageRow(img) {
       : `<span class="pill off ghost"><span class="dot"></span>${untagged ? 'Untagged' : 'Unused'}</span>`;
   const users = img.containers
     .slice(0, 3)
-    .map((c) => `<button class="port user" ${c.project ? `data-tab="p:${esc(c.project)}"` : 'data-tab="_standalone"'} title="${esc(c.name)} (${esc(c.state)})"><span class="dot ${c.state === 'running' ? 'ok' : 'off'}"></span>${esc(c.service && c.project ? `${c.project}/${c.service}` : c.name)}</button>`)
+    .map((c) => `<button class="port user" ${c.project ? `data-tab="p:${esc(c.project)}"` : 'data-tab="_standalone"'} title="${esc(c.name)} (${esc(c.state)})"><span class="dot ${c.state === 'running' ? 'ok' : 'off'}"></span><span class="lbl">${esc(c.service && c.project ? `${c.project}/${c.service}` : c.name)}</span></button>`)
     .join('');
   const more = img.containers.length > 3 ? `<span class="port more">+${img.containers.length - 3}</span>` : '';
   const extraTags = img.tags.length > 1 ? ` · +${img.tags.length - 1} tag${img.tags.length > 2 ? 's' : ''}` : '';

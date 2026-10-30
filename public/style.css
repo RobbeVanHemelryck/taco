@@ -788,8 +788,9 @@ details.isec summary::-webkit-details-marker { display: none; }
 .cb.disabled { border-style: dashed; background: transparent; opacity: .45; cursor: not-allowed; }
 .crow.in-use .cb.disabled { visibility: hidden; }
 .c-txt .n.untagged { color: var(--text-2); font-style: italic; font-weight: 500; }
-.port.user { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font); font-size: 12px; cursor: pointer; }
-.port.user .dot { width: 6px; height: 6px; }
+.port.user { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font); font-size: 12px; cursor: pointer; max-width: 100%; min-width: 0; }
+.port.user .dot { width: 6px; height: 6px; flex: none; }
+.port.user .lbl { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 @media (hover: hover) { .port.user:hover { color: var(--accent); background: var(--accent-softer); border-color: var(--accent-soft); } }
 .toolbar .seg { flex: none; }
 .seg-n { font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; margin-left: 2px; }
