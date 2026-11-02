@@ -218,11 +218,15 @@ async function mountView(v, key) {
   Object.assign(S.view, mod.mount(el, ctx) || {});
 }
 
+let dock = localStorage.getItem('taco.dock') === 'bottom' ? 'bottom' : 'right';
+document.body.classList.toggle('dock-bottom', dock === 'bottom');
+
 function renderPanelHead() {
   if (!S.view) return;
   const head = $('#panel [data-r="phead"]');
   if (!head) return;
   const { v } = S.view;
+  const dockBottom = dock === 'bottom';
   let title;
   let sub;
   let dot;
@@ -247,6 +251,7 @@ function renderPanelHead() {
     <button class="iconbtn pv-back narrow-only" data-act="closeview" aria-label="Back">${icon('back')}</button>
     <div class="pv-title"><div class="t"><span class="dot ${dot}"></span><span>${esc(title)}</span></div><div class="s">${esc(sub)}</div></div>
     ${seg}
+    <button class="iconbtn wide-only" data-act="dock" aria-label="${dockBottom ? 'Move panel to the right' : 'Move panel to the bottom'}" title="${dockBottom ? 'Move panel to the right' : 'Move panel to the bottom'}">${icon(dockBottom ? 'dock-right' : 'dock-bottom')}</button>
     <button class="iconbtn wide-only" data-act="closeview" aria-label="Close panel" title="Close (Esc)">${icon('x')}</button>`;
   if (html !== S.view.lastHead) head.innerHTML = S.view.lastHead = html;
 }
@@ -1319,6 +1324,12 @@ document.addEventListener('click', async (e) => {
     case 'zoom-reset': setZoom(1); break;
     case 'theme':
       return toggleTheme();
+    case 'dock':
+      dock = dock === 'bottom' ? 'right' : 'bottom';
+      localStorage.setItem('taco.dock', dock);
+      document.body.classList.toggle('dock-bottom', dock === 'bottom');
+      if (S.view) S.view.lastHead = '';
+      return renderPanelHead();
     case 'sbtoggle':
       sbExpanded = !sbExpanded;
       localStorage.setItem('taco.sbExpanded', sbExpanded ? '1' : '0');
@@ -1461,25 +1472,28 @@ addEventListener('popstate', () => {
   });
 })();
 
-// Drag the panel's left edge to resize it.
+// Drag the panel's inner edge to resize it (left edge when docked right, top edge when docked bottom).
 (() => {
   const rz = $('#resizer');
   const saved = localStorage.getItem('taco.panelw');
   if (saved) document.documentElement.style.setProperty('--panel-w', saved);
+  const savedH = localStorage.getItem('taco.panelh');
+  if (savedH) document.documentElement.style.setProperty('--panel-h', savedH);
   rz.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     rz.setPointerCapture(e.pointerId);
     rz.classList.add('drag');
     document.body.classList.add('resizing');
     const move = (ev) => {
-      const w = `${Math.round(Math.max(380, (innerWidth - ev.clientX) / zoom))}px`;
-      document.documentElement.style.setProperty('--panel-w', w);
+      if (dock === 'bottom') document.documentElement.style.setProperty('--panel-h', `${Math.round(Math.max(140, (innerHeight - ev.clientY) / zoom))}px`);
+      else document.documentElement.style.setProperty('--panel-w', `${Math.round(Math.max(380, (innerWidth - ev.clientX) / zoom))}px`);
     };
     const up = () => {
       rz.classList.remove('drag');
       document.body.classList.remove('resizing');
       rz.removeEventListener('pointermove', move);
       localStorage.setItem('taco.panelw', getComputedStyle(document.documentElement).getPropertyValue('--panel-w').trim());
+      localStorage.setItem('taco.panelh', getComputedStyle(document.documentElement).getPropertyValue('--panel-h').trim());
     };
     rz.addEventListener('pointermove', move);
     rz.addEventListener('pointerup', up, { once: true });

@@ -126,6 +126,8 @@ export function mount(el, { container }) {
     term.loadAddon(fit);
     term.open(wrap);
     fit.fit();
+    // Let the browser handle Ctrl/Cmd+V (a native paste event xterm turns into input) instead of sending ^V.
+    term.attachCustomKeyEventHandler((e) => !((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'v'));
     term.onData((d) => send(withCtrl(d)));
     let rt;
     ro = new ResizeObserver(() => {
