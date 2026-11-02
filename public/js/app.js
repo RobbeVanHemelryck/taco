@@ -1181,7 +1181,6 @@ async function projectMenu(btn, name) {
   const p = projectByName(name);
   if (!p) return;
   const hasBuild = S.services[name]?.services.some((s) => s.build);
-  const hasContainers = projectContainers(name).length > 0;
   const v = await menu(btn, {
     title: name,
     subtitle: p.configFiles[0] || '',
@@ -1189,7 +1188,7 @@ async function projectMenu(btn, name) {
       { label: 'Start', icon: 'play', value: 'start', hint: 'existing containers' },
       { label: 'Pull images', icon: 'pull', value: 'pull' },
       hasBuild && { label: 'Build & up', icon: 'hammer', value: 'build' },
-      p.filesAccessible && p.configFiles.length === 1 && { label: 'Rename', icon: 'pencil', value: 'rename', disabled: hasContainers, hint: hasContainers ? 'down it first' : '' },
+      p.filesAccessible && p.configFiles.length === 1 && { label: 'Rename', icon: 'pencil', value: 'rename' },
       'sep',
       { label: 'Kill', icon: 'zap', value: 'kill', danger: true },
       { label: 'Down', icon: 'power', value: 'down', danger: true, hint: 'removes containers' },
@@ -1201,18 +1200,28 @@ async function projectMenu(btn, name) {
 
 async function renameStack(name) {
   if (S.files && S.tab === `p:${name}` && !S.files.canLeave()) return toast('Save or discard your edits first', 'err');
+  // Containers carry the stack name they were created with, so the rename removes them first.
+  const cs = projectContainers(name);
+  const running = cs.some((c) => c.state === 'running');
+  const down = !cs.length
+    ? ''
+    : running
+      ? ' The stack is running: its containers are removed first and it is started again under the new name.'
+      : ` Its ${cs.length === 1 ? 'container is' : `${cs.length} containers are`} removed first.`;
   const next = await dialog({
     title: `Rename ${name}`,
-    message: 'Sets name: in the compose file and renames its file or folder to match. Existing named volumes are pinned so they keep their data.',
+    message: `Sets name: in the compose file and renames its file or folder to match.${down} Named volumes keep their data.`,
     input: { placeholder: 'name (a-z, 0-9, -, _)', value: name },
-    actions: [{ label: 'Rename', kind: 'primary', value: true }],
+    actions: [{ label: cs.length ? (running ? 'Rename & restart' : 'Remove containers & rename') : 'Rename', kind: cs.length ? 'danger' : 'primary', value: true }],
   });
   if (!next || next === name) return;
+  if (cs.length) toast(running ? `Stopping ${name}…` : `Removing containers of ${name}…`);
   try {
     const p = await api(`/api/projects/${encodeURIComponent(name)}/rename`, { method: 'POST', body: { name: next } });
     delete S.services[name];
     await refresh();
-    toast(`Renamed to ${p.name}${p.pinnedVolumes.length ? `, pinned ${p.pinnedVolumes.join(', ')}` : ''}`);
+    if (p.upError) toast(`Renamed to ${p.name}, but starting it failed: ${p.upError}`, 'err');
+    else toast(`Renamed to ${p.name}${p.restarted ? ' and started again' : ''}${p.pinnedVolumes.length ? `, pinned ${p.pinnedVolumes.join(', ')}` : ''}`);
     if (S.tab === `p:${name}`) {
       history.replaceState(history.state, '', hashFor(`p:${p.name}`));
       render();

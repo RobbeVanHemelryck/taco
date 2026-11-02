@@ -371,8 +371,8 @@ export async function renameStack(p, newName) {
   if (!p.filesAccessible) throw new HttpError(400, 'compose file is not accessible from taco');
   if (p.configFiles.length !== 1) throw new HttpError(400, 'stacks with more than one compose file cannot be renamed');
   const { projects, containers } = await overview();
-  // Containers keep the project name they were created with: they'd be orphaned.
-  if (containers.some((c) => c.project === p.name)) throw new HttpError(409, `${p.name} still has containers, bring it down first`);
+  const own = containers.filter((c) => c.project === p.name);
+  const wasRunning = own.some((c) => c.state === 'running');
   if (projects.some((x) => x.name === name)) throw new HttpError(409, `project ${name} already exists`);
 
   const { moves, map } = renamedPaths(p, name);
@@ -385,6 +385,13 @@ export async function renameStack(p, newName) {
   text = pinnedText;
   const v = await validate(p, file, text);
   if (!v.ok) throw new HttpError(422, v.error, { validation: true });
+
+  // Containers keep the project name they were created with, so they go first.
+  if (own.length) {
+    const r = await docker.run([...composeArgs(p), 'down', '--remove-orphans'], { timeout: 300_000 });
+    invalidate();
+    if (r.code !== 0) throw new HttpError(500, `docker compose down failed: ${r.stderr.trim()}`);
+  }
 
   await backup(p, file);
   await fs.writeFile(file, text);
@@ -404,5 +411,12 @@ export async function renameStack(p, newName) {
   delete k[p.name];
   await saveKnown({ ...k, [name]: next });
   invalidate();
-  return { ...next, pinnedVolumes: pinned };
+  // The rename itself is done at this point: a failing `up` is reported, not thrown.
+  let upError = '';
+  if (wasRunning) {
+    const r = await docker.run([...composeArgs({ ...next, filesAccessible: true }), 'up', '-d'], { timeout: 300_000 });
+    invalidate();
+    if (r.code !== 0) upError = r.stderr.trim() || 'docker compose up failed';
+  }
+  return { ...next, pinnedVolumes: pinned, restarted: wasRunning && !upError, upError };
 }
