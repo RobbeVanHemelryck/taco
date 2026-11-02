@@ -403,7 +403,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .crow .cb { opacity: .8; }
 .c-meta { display: contents; }
 .c-name { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.c-txt { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.c-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .c-txt > .n { flex: none; }
 .c-txt > .img { min-width: 0; contain: inline-size; }
 .c-txt .n { font-weight: 560; font-size: 14px; white-space: nowrap; letter-spacing: -.003em; }
