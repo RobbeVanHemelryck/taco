@@ -268,7 +268,9 @@ function renderSidebar() {
     sb.innerHTML = `<div data-n="head"></div>
       <label class="sb-search">${icon('search')}<input class="filter" type="search" placeholder="Search" value="${esc(S.filter)}" autocapitalize="off" autocorrect="off" spellcheck="false"><kbd>/</kbd></label>
       <nav class="sb-list" data-n="list"></nav>
-      <div class="sb-foot"><button class="sb-theme" data-act="theme" title="Toggle light/dark mode" aria-label="Toggle light/dark mode">${icon('sun', 'sun')}${icon('moon', 'moon')}</button></div>`;
+      <div class="sb-foot"><button class="sb-theme" data-act="theme" title="Toggle light/dark mode" aria-label="Toggle light/dark mode">${icon('sun', 'sun')}${icon('moon', 'moon')}</button>
+        <div class="sb-zoom"><button data-act="zoom-out" title="Zoom out" aria-label="Zoom out">${icon('minus')}</button><button class="lvl" data-act="zoom-reset" title="Reset zoom" aria-label="Reset zoom"></button><button data-act="zoom-in" title="Zoom in" aria-label="Zoom in">${icon('plus')}</button></div></div>`;
+    syncZoomUi();
   }
   const i = S.info;
   const head = `<div class="sb-head">
@@ -300,25 +302,38 @@ function renderSidebar() {
   if (list !== lastSide.list) $('[data-n="list"]', sb).innerHTML = lastSide.list = list;
 }
 
-let lastTabs = '';
-function renderTabbar(scroll) {
-  const bar = $('#tabbar');
+function renderTabbar() {
+  const bar = $('#topbar');
   if (!bar.firstChild) {
-    bar.innerHTML = `<button class="tb-jump" data-act="jump" aria-label="Jump to stack">${icon('grid')}</button><div class="tb-tabs" role="tablist"></div>`;
+    bar.innerHTML = `<button class="tb-jump" data-act="navopen" aria-label="Open menu">${icon('menu')}</button><div class="tb-title"></div>`;
   }
-  const html = tabs()
-    .map((t) => {
-      const lead = t.project ? `<span class="dot ${projectTone(t.project).tone}"></span>` : icon({ _home: 'home', _images: 'disk', _volumes: 'database' }[t.id] || 'box');
-      return `<button class="tb-tab ${t.id === S.tab ? 'active' : ''}" role="tab" data-tab="${esc(t.id)}">${lead}<span>${esc(t.label)}</span></button>`;
-    })
-    .join('');
-  const box = $('.tb-tabs', bar);
-  if (html !== lastTabs) {
-    box.innerHTML = lastTabs = html;
-    scroll = true;
-  }
-  if (scroll) $('.tb-tab.active', box)?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  const cur = tabs().find((t) => t.id === S.tab);
+  $('.tb-title', bar).textContent = cur?.label || S.info?.host || 'taco';
 }
+
+const setNav = (open) => document.body.classList.toggle('nav-open', open);
+$('#scrim').addEventListener('click', () => setNav(false));
+
+// ================================================================ zoom
+
+const ZOOM_MIN = 0.7, ZOOM_MAX = 1.8, ZOOM_STEP = 0.1;
+let zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, parseFloat(localStorage.getItem('taco.zoom')) || 1));
+function syncZoomUi() {
+  document.documentElement.style.setProperty('--zoom', zoom);
+  const sb = $('#sidebar');
+  if (!sb) return;
+  const lvl = $('.sb-zoom .lvl', sb);
+  if (lvl) lvl.textContent = `${Math.round(zoom * 100)}%`;
+  const out = $('[data-act="zoom-out"]', sb), inn = $('[data-act="zoom-in"]', sb);
+  if (out) out.disabled = zoom <= ZOOM_MIN + 1e-6;
+  if (inn) inn.disabled = zoom >= ZOOM_MAX - 1e-6;
+}
+function setZoom(z) {
+  zoom = Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) * 100) / 100;
+  localStorage.setItem('taco.zoom', zoom);
+  syncZoomUi();
+}
+document.documentElement.style.setProperty('--zoom', zoom);
 
 // ================================================================ theme
 
@@ -1233,22 +1248,6 @@ async function renameStack(name) {
   }
 }
 
-async function jumpMenu(btn) {
-  const v = await menu(btn, {
-    title: 'Go to',
-    items: [
-      ...tabs().map((t) => {
-        const pt = t.project && projectTone(t.project);
-        return { label: t.label, icon: t.project ? 'layers' : { _home: 'home', _images: 'disk', _volumes: 'database' }[t.id] || 'box', value: `t:${t.id}`, hint: pt ? countLabel(pt) : '' };
-      }),
-      S.info?.stacksDir && 'sep',
-      S.info?.stacksDir && { label: 'New stack', icon: 'plus', value: 'new' },
-    ],
-  });
-  if (v === 'new') newStack();
-  else if (v) goTab(v.slice(2));
-}
-
 async function newStack() {
   const name = await dialog({
     title: 'New stack',
@@ -1274,7 +1273,10 @@ document.addEventListener('click', async (e) => {
   const t = e.target.closest('[data-act],[data-tab]');
   if (!t || t.disabled) return;
   const a = t.dataset.act;
-  if (!a && t.dataset.tab) return goTab(t.dataset.tab);
+  if (!a && t.dataset.tab) {
+    setNav(false);
+    return goTab(t.dataset.tab);
+  }
   switch (a) {
     case 'view':
       if (!t.dataset.v) return;
@@ -1306,10 +1308,13 @@ document.addEventListener('click', async (e) => {
       return selectionAction(t.dataset.a);
     case 'newstack':
       return newStack();
+    case 'zoom-in': setZoom(zoom + ZOOM_STEP); break;
+    case 'zoom-out': setZoom(zoom - ZOOM_STEP); break;
+    case 'zoom-reset': setZoom(1); break;
     case 'theme':
       return toggleTheme();
-    case 'jump':
-      return jumpMenu(t);
+    case 'navopen':
+      return setNav(true);
     case 'imenu':
       return imageMenu(t, t.dataset.id);
     case 'imgdel':
@@ -1373,7 +1378,10 @@ document.addEventListener('keydown', (e) => {
   // Enter in the sidebar search opens the first matching stack.
   if (e.target.classList?.contains('filter') && e.key === 'Enter' && e.target.closest('#sidebar')) {
     const first = $('#sidebar .sb-item[data-tab^="p:"]');
-    if (first) goTab(first.dataset.tab);
+    if (first) {
+      setNav(false);
+      goTab(first.dataset.tab);
+    }
   }
 });
 
@@ -1421,9 +1429,9 @@ addEventListener('popstate', () => {
     rz.setPointerCapture(e.pointerId);
     rz.classList.add('drag');
     document.body.classList.add('resizing');
-    const left = $('#sidebar').getBoundingClientRect().left;
+    const left = $('#sidebar').getBoundingClientRect().left / zoom;
     const move = (ev) => {
-      const w = Math.round(Math.min(480, Math.max(180, ev.clientX - left)));
+      const w = Math.round(Math.min(480, Math.max(180, ev.clientX / zoom - left)));
       document.documentElement.style.setProperty('--sidebar-w', `${w}px`);
     };
     const up = () => {
@@ -1454,7 +1462,7 @@ addEventListener('popstate', () => {
     rz.classList.add('drag');
     document.body.classList.add('resizing');
     const move = (ev) => {
-      const w = `${Math.round(Math.max(380, innerWidth - ev.clientX))}px`;
+      const w = `${Math.round(Math.max(380, (innerWidth - ev.clientX) / zoom))}px`;
       document.documentElement.style.setProperty('--panel-w', w);
     };
     const up = () => {
