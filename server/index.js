@@ -262,6 +262,10 @@ route('POST', '/api/projects/:name/action/:action', async ({ params, body, res }
   await streamJob(res, steps.map((s) => [...projects.composeArgs(p), ...s, ...svcs]));
 });
 
+route('POST', '/api/projects/:name/rename', async ({ params, body }) =>
+  projects.renameStack(await projects.getProject(params.name), body.name),
+);
+
 route('GET', '/api/projects/:name/logs', async ({ params, query, res }) => {
   const p = await projects.getProject(params.name);
   const args = [...projects.composeArgs(p), 'logs', '--timestamps', '--no-color', '--tail', tailArg(query)];

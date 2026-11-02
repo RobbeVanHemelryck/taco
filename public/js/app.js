@@ -1188,12 +1188,49 @@ async function projectMenu(btn, name) {
       { label: 'Start', icon: 'play', value: 'start', hint: 'existing containers' },
       { label: 'Pull images', icon: 'pull', value: 'pull' },
       hasBuild && { label: 'Build & up', icon: 'hammer', value: 'build' },
+      p.filesAccessible && p.configFiles.length === 1 && { label: 'Rename', icon: 'pencil', value: 'rename' },
       'sep',
       { label: 'Kill', icon: 'zap', value: 'kill', danger: true },
       { label: 'Down', icon: 'power', value: 'down', danger: true, hint: 'removes containers' },
     ],
   });
-  if (v) projectAction(name, v);
+  if (v === 'rename') renameStack(name);
+  else if (v) projectAction(name, v);
+}
+
+async function renameStack(name) {
+  if (S.files && S.tab === `p:${name}` && !S.files.canLeave()) return toast('Save or discard your edits first', 'err');
+  // Containers carry the stack name they were created with, so the rename removes them first.
+  const cs = projectContainers(name);
+  const running = cs.some((c) => c.state === 'running');
+  const n = cs.length === 1 ? 'Its container is' : `Its ${cs.length} containers are`;
+  const warn = !cs.length
+    ? ''
+    : running
+      ? `<strong>This restarts ${esc(name)}.</strong> ${n} removed and recreated under the new name, so it is briefly offline.`
+      : `<strong>${n} removed.</strong> They are recreated under the new name on the next Up.`;
+  const next = await dialog({
+    title: `Rename ${name}`,
+    message: 'Sets name: in the compose file and renames its file or folder to match. Named volumes keep their data.',
+    html: warn && `<div class="notice warn">${icon('alert')}<div>${warn}</div></div>`,
+    input: { placeholder: 'name (a-z, 0-9, -, _)', value: name },
+    actions: [{ label: cs.length ? (running ? 'Rename & restart' : 'Remove containers & rename') : 'Rename', kind: cs.length ? 'danger' : 'primary', value: true }],
+  });
+  if (!next || next === name) return;
+  if (cs.length) toast(running ? `Stopping ${name}…` : `Removing containers of ${name}…`);
+  try {
+    const p = await api(`/api/projects/${encodeURIComponent(name)}/rename`, { method: 'POST', body: { name: next } });
+    delete S.services[name];
+    await refresh();
+    if (p.upError) toast(`Renamed to ${p.name}, but starting it failed: ${p.upError}`, 'err');
+    else toast(`Renamed to ${p.name}${p.restarted ? ' and started again' : ''}${p.pinnedVolumes.length ? `, pinned ${p.pinnedVolumes.join(', ')}` : ''}`);
+    if (S.tab === `p:${name}`) {
+      history.replaceState(history.state, '', hashFor(`p:${p.name}`));
+      render();
+    }
+  } catch (e) {
+    toast(e.message, 'err');
+  }
 }
 
 async function jumpMenu(btn) {

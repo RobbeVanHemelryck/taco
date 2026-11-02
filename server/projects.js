@@ -8,6 +8,7 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { parseDocument, isMap } from 'yaml';
 import * as docker from './docker.js';
 import { HttpError } from './docker.js';
 
@@ -302,4 +303,120 @@ export async function createStack(name) {
   const p = { name, configFiles: [file], workingDir: STACKS_DIR, envFile: path.join(STACKS_DIR, `${name}.env`) };
   await saveKnown({ ...(await loadKnown()), [name]: p });
   return p;
+}
+
+// Set (or add) the top-level `name:` of a compose file, leaving the rest of the text alone.
+function setComposeName(text, name) {
+  const re = /^name:.*$/m;
+  if (re.test(text)) return text.replace(re, `name: ${name}`);
+  return `name: ${name}\n\n${text}`;
+}
+
+// Compose prefixes named volumes with the project name, so after a rename `up`
+// would create fresh, empty ones. Pin the volumes that already exist to their
+// current docker name to keep the data.
+async function pinVolumes(text, oldName) {
+  const existing = (await docker.listVolumes().catch(() => [])).filter((v) => v.project === oldName && v.composeName);
+  if (!existing.length) return { text, pinned: [] };
+  const doc = parseDocument(text);
+  const vols = doc.get('volumes', true);
+  if (doc.errors.length || !isMap(vols)) return { text, pinned: [] };
+  const pinned = [];
+  for (const v of existing) {
+    if (v.name !== `${oldName}_${v.composeName}` || !vols.has(v.composeName)) continue;
+    const def = vols.get(v.composeName, true);
+    if (isMap(def)) {
+      if (def.has('name') || def.get('external')) continue;
+      def.set('name', v.name);
+    } else {
+      vols.set(v.composeName, doc.createNode({ name: v.name }));
+    }
+    pinned.push(v.name);
+  }
+  return pinned.length ? { text: doc.toString({ lineWidth: 0 }), pinned } : { text, pinned };
+}
+
+const inStacksDir = (f) => f.startsWith(STACKS_DIR + path.sep);
+
+// Where a stack's files move to on rename, so the file (or directory) name keeps
+// matching the stack name. Only stacks in the stacks dir are moved.
+function renamedPaths(p, name) {
+  const [file] = p.configFiles;
+  const dir = path.dirname(file);
+  const moves = [];
+  const swap = (from, to) => (f) => (f === from ? to : f.startsWith(from + path.sep) ? to + f.slice(from.length) : f);
+  let map = (f) => f;
+  if (dir === STACKS_DIR && !COMPOSE_NAMES.includes(path.basename(file))) {
+    // <stacks>/<stack>.yaml (+ <stacks>/<stack>.env)
+    const stem = path.basename(file).replace(/\.ya?ml$/, '');
+    const to = path.join(STACKS_DIR, `${name}${path.extname(file)}`);
+    moves.push([file, to]);
+    const env = path.join(STACKS_DIR, `${stem}.env`);
+    const envTo = path.join(STACKS_DIR, `${name}.env`);
+    if (existsSync(env)) moves.push([env, envTo]);
+    map = (f) => (f === file ? to : f === env ? envTo : f);
+  } else if (inStacksDir(dir) && path.dirname(dir) === STACKS_DIR) {
+    // <stacks>/<stack>/compose.yaml
+    const to = path.join(STACKS_DIR, name);
+    moves.push([dir, to]);
+    map = swap(dir, to);
+  }
+  return { moves: moves.filter(([a, b]) => a !== b), map };
+}
+
+export async function renameStack(p, newName) {
+  const name = normalizeName(newName || '');
+  if (!name) throw new HttpError(400, 'invalid name (use a-z, 0-9, _ and -)');
+  if (name === p.name) throw new HttpError(400, 'that is already the name of this stack');
+  if (!p.filesAccessible) throw new HttpError(400, 'compose file is not accessible from taco');
+  if (p.configFiles.length !== 1) throw new HttpError(400, 'stacks with more than one compose file cannot be renamed');
+  const { projects, containers } = await overview();
+  const own = containers.filter((c) => c.project === p.name);
+  const wasRunning = own.some((c) => c.state === 'running');
+  if (projects.some((x) => x.name === name)) throw new HttpError(409, `project ${name} already exists`);
+
+  const { moves, map } = renamedPaths(p, name);
+  const taken = moves.find(([, to]) => existsSync(to));
+  if (taken) throw new HttpError(409, `${taken[1]} already exists`);
+
+  const [file] = p.configFiles;
+  let text = setComposeName(await fs.readFile(file, 'utf8'), name);
+  const { text: pinnedText, pinned } = await pinVolumes(text, p.name);
+  text = pinnedText;
+  const v = await validate(p, file, text);
+  if (!v.ok) throw new HttpError(422, v.error, { validation: true });
+
+  // Containers keep the project name they were created with, so they go first.
+  if (own.length) {
+    const r = await docker.run([...composeArgs(p), 'down', '--remove-orphans'], { timeout: 300_000 });
+    invalidate();
+    if (r.code !== 0) throw new HttpError(500, `docker compose down failed: ${r.stderr.trim()}`);
+  }
+
+  await backup(p, file);
+  await fs.writeFile(file, text);
+  for (const [from, to] of moves) await fs.rename(from, to);
+  // Keep the backups with the stack.
+  const oldBackups = path.join(DATA_DIR, 'backups', p.name);
+  const newBackups = path.join(DATA_DIR, 'backups', name);
+  if (existsSync(oldBackups) && !existsSync(newBackups)) await fs.rename(oldBackups, newBackups).catch(() => {});
+
+  const next = {
+    name,
+    configFiles: p.configFiles.map(map),
+    workingDir: p.workingDir && map(p.workingDir),
+    envFile: p.envFile && map(p.envFile),
+  };
+  const k = { ...(await loadKnown()) };
+  delete k[p.name];
+  await saveKnown({ ...k, [name]: next });
+  invalidate();
+  // The rename itself is done at this point: a failing `up` is reported, not thrown.
+  let upError = '';
+  if (wasRunning) {
+    const r = await docker.run([...composeArgs({ ...next, filesAccessible: true }), 'up', '-d'], { timeout: 300_000 });
+    invalidate();
+    if (r.code !== 0) upError = r.stderr.trim() || 'docker compose up failed';
+  }
+  return { ...next, pinnedVolumes: pinned, restarted: wasRunning && !upError, upError };
 }
