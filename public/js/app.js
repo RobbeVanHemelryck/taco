@@ -1203,14 +1203,16 @@ async function renameStack(name) {
   // Containers carry the stack name they were created with, so the rename removes them first.
   const cs = projectContainers(name);
   const running = cs.some((c) => c.state === 'running');
-  const down = !cs.length
+  const n = cs.length === 1 ? 'Its container is' : `Its ${cs.length} containers are`;
+  const warn = !cs.length
     ? ''
     : running
-      ? ' The stack is running: its containers are removed first and it is started again under the new name.'
-      : ` Its ${cs.length === 1 ? 'container is' : `${cs.length} containers are`} removed first.`;
+      ? `<strong>This restarts ${esc(name)}.</strong> ${n} removed and recreated under the new name, so it is briefly offline.`
+      : `<strong>${n} removed.</strong> They are recreated under the new name on the next Up.`;
   const next = await dialog({
     title: `Rename ${name}`,
-    message: `Sets name: in the compose file and renames its file or folder to match.${down} Named volumes keep their data.`,
+    message: 'Sets name: in the compose file and renames its file or folder to match. Named volumes keep their data.',
+    html: warn && `<div class="notice warn">${icon('alert')}<div>${warn}</div></div>`,
     input: { placeholder: 'name (a-z, 0-9, -, _)', value: name },
     actions: [{ label: cs.length ? (running ? 'Rename & restart' : 'Remove containers & rename') : 'Rename', kind: cs.length ? 'danger' : 'primary', value: true }],
   });
