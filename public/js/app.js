@@ -262,6 +262,7 @@ function renderBanner() {
 const hostLine = (i) => (i ? `Docker ${esc(i.serverVersion)} · Compose ${esc(i.composeVersion)}` : '&nbsp;');
 
 let lastSide = { head: '', list: '' };
+let sbExpanded = localStorage.getItem('taco.sbExpanded') === '1';
 function renderSidebar() {
   const sb = $('#sidebar');
   if (!sb.firstChild) {
@@ -279,16 +280,21 @@ function renderSidebar() {
     </div>`;
   const f = S.filter.trim().toLowerCase();
   const item = (id, lead, label, count, cls = '') =>
-    `<button class="sb-item ${id === S.tab ? 'active' : ''} ${cls}" data-tab="${esc(id)}" title="${esc(label)}">${lead}<span class="n">${esc(label)}</span><span class="c">${count}</span></button>`;
+    `<button class="sb-item ${id === S.tab && !cls ? 'active' : ''} ${cls}" data-tab="${esc(id)}" title="${esc(label)}">${lead}<span class="n">${esc(label)}</span><span class="c">${count}</span></button>`;
   const running = S.containers.filter((c) => c.state === 'running').length;
   const ps = S.projects.filter((p) => !f || p.name.toLowerCase().includes(f) || projectContainers(p.name).some((c) => c.name.includes(f)));
   const sa = standalone();
   let list = item('_home', icon('home'), 'Overview', `${running}/${S.containers.length}`);
-  list += `<div class="sb-section"><span>Stacks</span><span class="sp"></span>${i?.stacksDir ? `<button class="sb-add" data-act="newstack" title="New stack" aria-label="New stack">${icon('plus')}</button>` : ''}</div>`;
+  list += `<div class="sb-section"><span>Stacks</span><span class="sp"></span>${ps.length ? `<button class="sb-add" data-act="sbtoggle" title="${sbExpanded ? 'Fold all stacks' : 'Expand all stacks'}" aria-label="${sbExpanded ? 'Fold all stacks' : 'Expand all stacks'}">${icon(sbExpanded ? 'chevrons-up' : 'chevrons-down')}</button>` : ''}${i?.stacksDir ? `<button class="sb-add" data-act="newstack" title="New stack" aria-label="New stack">${icon('plus')}</button>` : ''}</div>`;
   list += ps
     .map((p) => {
       const pt = projectTone(p.name);
-      return item(`p:${p.name}`, `<span class="dot ${pt.tone}"></span>`, p.name, countLabel(pt));
+      let h = item(`p:${p.name}`, `<span class="dot ${pt.tone}"></span>`, p.name, countLabel(pt));
+      if (sbExpanded) {
+        const cs = projectContainers(p.name).filter((c) => !f || p.name.toLowerCase().includes(f) || c.name.toLowerCase().includes(f));
+        h += cs.map((c) => item(`p:${p.name}`, `<span class="dot ${tone(c)}"></span>`, c.name, '', 'sub')).join('');
+      }
+      return h;
     })
     .join('');
   if (!ps.length && S.loaded) list += `<div class="sb-empty">${S.projects.length ? 'No match' : 'No stacks found'}</div>`;
@@ -453,7 +459,7 @@ function usageHtml(c) {
 }
 
 const rowBtn = (act, ic, label, attrs, { on = false, disabled = false } = {}) =>
-  `<button class="rb ${on ? 'on' : ''}" data-act="${act}" ${attrs} title="${esc(label)}" aria-label="${esc(label)}" ${disabled ? 'disabled' : ''}>${icon(ic)}<span>${esc(label)}</span></button>`;
+  `<button class="rb icon ${on ? 'on' : ''}" data-act="${act}" ${attrs} title="${esc(label)}" aria-label="${esc(label)}" ${disabled ? 'disabled' : ''}>${icon(ic)}</button>`;
 
 const checkbox = (state, attrs, label) =>
   `<button class="cb ${state}" role="checkbox" aria-checked="${state === 'on' ? 'true' : state === 'mixed' ? 'mixed' : 'false'}" aria-label="${esc(label)}" ${attrs}>${icon(state === 'mixed' ? 'minus' : 'check')}</button>`;
@@ -468,7 +474,7 @@ function containerRow(c, { selectable = true, withProject = false } = {}) {
   const proj = withProject && c.project ? `<span class="tag">${esc(c.project)}</span>` : '';
   return `<div class="crow ${sel ? 'selected' : ''} ${open ? 'active' : ''}" data-key="${esc(key)}" ${selectable ? 'data-act="rowsel"' : ''}>
     ${selectable ? checkbox(sel ? 'on' : '', `data-act="sel" data-key="${esc(key)}"`, `Select ${label}`) : ''}
-    <div class="c-name"><span class="dot ${tone(c)}"></span><div class="c-txt"><div class="n" title="${esc(c.name)}">${esc(label)}${proj}</div><div class="img" title="${esc(c.image)}">${esc(shortImage(c.image))}</div></div></div>
+    <div class="c-name"><span class="dot ${tone(c)}"></span><div class="c-txt"><div class="n" title="${esc(c.name)}">${esc(c.name)}${proj}</div><div class="img" title="${esc(c.image)}">${esc(shortImage(c.image))}</div></div></div>
     <div class="c-meta">
       <div class="c-status">${statusPill(c)}</div>
       <div class="c-ports">${portsHtml(c)}</div>
@@ -1313,6 +1319,10 @@ document.addEventListener('click', async (e) => {
     case 'zoom-reset': setZoom(1); break;
     case 'theme':
       return toggleTheme();
+    case 'sbtoggle':
+      sbExpanded = !sbExpanded;
+      localStorage.setItem('taco.sbExpanded', sbExpanded ? '1' : '0');
+      return renderSidebar();
     case 'navopen':
       return setNav(true);
     case 'imenu':
